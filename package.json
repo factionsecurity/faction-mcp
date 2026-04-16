@@ -1,0 +1,25 @@
+{
+  "name": "faction-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Faction penetration testing management platform",
+  "type": "module",
+  "bin": {
+    "faction-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/index.js",
+    "watch": "tsc --watch",
+    "dev": "node --loader ts-node/esm src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.89.0",
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "node-fetch": "^3.3.2",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.13",
+    "shx": "0.4.0",
+    "typescript": "5.9.3"
+  }
+}

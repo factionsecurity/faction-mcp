@@ -1,0 +1,8 @@
+services:
+  faction-mcp:
+    build: .
+    image: mcp/faction
+    stdin_open: true
+    environment:
+      FACTION_API_KEY: ${FACTION_API_KEY}
+      FACTION_BASE_URL: ${FACTION_BASE_URL}

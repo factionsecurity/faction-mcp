@@ -1,0 +1,36 @@
+name: faction
+image: mcp/faction
+type: server
+meta:
+  category: security
+  tags:
+    - security
+    - pentesting
+    - assessments
+    - vulnerabilities
+about:
+  title: Faction
+  description: Manage penetration testing assessments, vulnerabilities, retests, and audit logs in Faction.
+  icon: https://raw.githubusercontent.com/your-org/faction-mcp/main/assets/logo.png
+source:
+  project: https://github.com/your-org/faction-mcp
+  commit: REPLACE_WITH_COMMIT_HASH
+config:
+  description: Configure your Faction instance connection
+  secrets:
+    - name: faction.api_key
+      env: FACTION_API_KEY
+      example: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      description: Your Faction API key. Generate one in Faction under your user profile settings.
+  env:
+    - name: FACTION_BASE_URL
+      example: https://faction.yourcompany.com
+      value: '{{faction.base_url}}'
+  parameters:
+    type: object
+    properties:
+      base_url:
+        type: string
+        description: The base URL of your Faction instance (e.g. https://faction.yourcompany.com)
+    required:
+      - base_url
