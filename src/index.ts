@@ -180,6 +180,227 @@ server.tool(
   }
 );
 
+server.tool(
+  "create_assessment",
+  "Create a new assessment and schedule it to one or more assessors. Auto-creates users and teams if they don't exist — unknown emails receive a registration invite. Dates in YYYY-MM-DD format. Assessors and distribution list are semicolon-delimited. (engage role required)",
+  {
+    app_name: z.string().describe("Application/target name"),
+    type: z.string().describe("Assessment type (e.g. 'Web Application', 'Network', 'Mobile')"),
+    campaign: z.string().describe("Campaign name to associate this assessment with"),
+    start: z.string().describe("Assessment start date (YYYY-MM-DD)"),
+    end: z.string().describe("Assessment end date (YYYY-MM-DD)"),
+    assessors: z.string().describe("Semicolon-delimited list of assessor usernames (e.g. 'jdoe;jsmith')"),
+    engagement_username: z.string().describe("Username of the engagement/scheduling contact"),
+    remediation_username: z.string().describe("Username of the remediation contact"),
+    app_id: z.string().optional().describe("Existing application ID to link this assessment to"),
+    distro: z.string().optional().describe("Semicolon-delimited distribution list of emails"),
+    scope: z.string().optional().describe("Scope, credentials, and context for the assessors"),
+    auto_create_campaigns: z.boolean().optional().default(true).describe("Auto-create the campaign if it does not already exist"),
+  },
+  async ({ app_name, type, campaign, start, end, assessors, engagement_username, remediation_username, app_id, distro, scope, auto_create_campaigns }) => {
+    try {
+      const body: Record<string, string | boolean | undefined> = {
+        appName: app_name,
+        type,
+        campaign,
+        start,
+        end,
+        assessors,
+        engagement_username,
+        remediation_username,
+        appid: app_id,
+        distro,
+        scope,
+        auto_create_campaigns,
+      };
+      return ok(await factionPost("/assessments/create", body));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "get_completed_assessments",
+  "Get all completed assessments within a date range. Dates in MM/DD/YYYY format.",
+  {
+    start: z.string().describe("Start date (MM/DD/YYYY)"),
+    end: z.string().optional().describe("End date (MM/DD/YYYY). Defaults to now if omitted."),
+  },
+  async ({ start, end }) => {
+    try {
+      return ok(await factionPost("/assessments/completed", { start, end }));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "get_assessment_history",
+  "Get the vulnerability history for an application across all its assessments. Note: Application ID is not the same as Assessment ID — one application can span multiple assessments.",
+  {
+    app_id: z.string().describe("The application ID (not the assessment ID)"),
+  },
+  async ({ app_id }) => {
+    try {
+      return ok(await factionGet(`/assessments/history/${encodeURIComponent(app_id)}`));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "get_assessment_custom_field_types",
+  "Get the allowed custom field types for an assessment, including both assessment-level and vulnerability-level field definitions. Use this before setting custom_fields to know which keys are valid.",
+  {
+    assessment_id: z.number().int().describe("The assessment ID"),
+  },
+  async ({ assessment_id }) => {
+    try {
+      return ok(await factionGet(`/assessments/customfields/${assessment_id}`));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "get_vulnerability_details",
+  "Get full details and exploit steps for a specific vulnerability by ID (assessor role required). Returns richer data than get_vulnerability, including step-by-step exploit information.",
+  {
+    vulnerability_id: z.number().int().describe("The vulnerability ID"),
+  },
+  async ({ vulnerability_id }) => {
+    try {
+      return ok(await factionGet(`/assessments/vuln/${vulnerability_id}`));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "update_vulnerability_custom_fields",
+  "Update only the custom fields for an existing vulnerability. Custom field keys must match allowed types for the assessment — use get_assessment_custom_field_types to check valid keys.",
+  {
+    vulnerability_id: z.number().int().describe("The vulnerability ID"),
+    custom_fields: z.record(z.string(), z.string()).describe("Custom field key-value pairs"),
+  },
+  async ({ vulnerability_id, custom_fields }) => {
+    try {
+      return ok(await factionPost(`/assessments/vuln/${vulnerability_id}/customfields`, {
+        customFields: JSON.stringify(custom_fields),
+      }));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "create_vulnerability",
+  "Add a new vulnerability to an assessment (assessor role required). Description, recommendation, and details support HTML/Markdown.",
+  {
+    assessment_id: z.number().int().describe("The assessment ID"),
+    name: z.string().describe("Vulnerability name"),
+    vuln_template_id: z.number().int().optional().describe("Default vulnerability template ID to pre-populate fields"),
+    description: z.string().optional().describe("Vulnerability description (HTML/Markdown supported)"),
+    recommendation: z.string().optional().describe("Remediation recommendation (HTML/Markdown supported)"),
+    details: z.string().optional().describe("Exploit details / proof of concept (HTML/Markdown supported)"),
+    category_id: z.number().int().optional().describe("Vulnerability category ID"),
+    severity: z.number().int().min(0).max(9).optional().describe("Severity rating (0-9)"),
+    impact: z.number().int().min(0).max(9).optional().describe("Impact rating (0-9)"),
+    likelihood: z.number().int().min(0).max(9).optional().describe("Likelihood rating (0-9)"),
+    cvss_score: z.string().optional().describe("CVSS score (e.g. '7.5')"),
+    cvss_string: z.string().optional().describe("CVSS vector string"),
+    section: z.string().optional().describe("Section (Enterprise feature)"),
+    custom_fields: z.record(z.string(), z.string()).optional().describe("Custom field key-value pairs"),
+  },
+  async ({ assessment_id, name, vuln_template_id, description, recommendation, details, category_id, severity, impact, likelihood, cvss_score, cvss_string, section, custom_fields }) => {
+    try {
+      const body: Record<string, string | number | undefined> = {
+        name,
+        vulnTemplateId: vuln_template_id,
+        description: description ? Buffer.from(description).toString("base64") : undefined,
+        recommendation: recommendation ? Buffer.from(recommendation).toString("base64") : undefined,
+        details: details ? Buffer.from(details).toString("base64") : undefined,
+        categoryId: category_id,
+        severity,
+        impact,
+        likelihood,
+        cvssScore: cvss_score,
+        cvssString: cvss_string,
+        section,
+        customFields: custom_fields ? JSON.stringify(custom_fields) : undefined,
+      };
+      return ok(await factionPost(`/assessments/addVuln/${assessment_id}`, body));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "update_vulnerability",
+  "Update an existing vulnerability by ID (assessor role required). Only provided fields are updated. Description, recommendation, and details support HTML/Markdown.",
+  {
+    vulnerability_id: z.number().int().describe("The vulnerability ID"),
+    name: z.string().optional().describe("Vulnerability name"),
+    description: z.string().optional().describe("Vulnerability description (HTML/Markdown supported)"),
+    recommendation: z.string().optional().describe("Remediation recommendation (HTML/Markdown supported)"),
+    details: z.string().optional().describe("Exploit details / proof of concept (HTML/Markdown supported)"),
+    severity: z.number().int().min(0).max(9).optional().describe("Severity rating (0-9)"),
+    impact: z.number().int().min(0).max(9).optional().describe("Impact rating (0-9)"),
+    likelihood: z.number().int().min(0).max(9).optional().describe("Likelihood rating (0-9)"),
+    cvss_score: z.string().optional().describe("CVSS score (e.g. '7.5')"),
+    cvss_string: z.string().optional().describe("CVSS vector string"),
+    category_id: z.number().int().optional().describe("Vulnerability category ID"),
+    section: z.string().optional().describe("Section (Enterprise feature)"),
+    custom_fields: z.record(z.string(), z.string()).optional().describe("Custom field key-value pairs"),
+  },
+  async ({ vulnerability_id, name, description, recommendation, details, severity, impact, likelihood, cvss_score, cvss_string, category_id, section, custom_fields }) => {
+    try {
+      const body: Record<string, string | number | undefined> = {
+        name,
+        description: description ? Buffer.from(description).toString("base64") : undefined,
+        recommendation: recommendation ? Buffer.from(recommendation).toString("base64") : undefined,
+        details: details ? Buffer.from(details).toString("base64") : undefined,
+        severity,
+        impact,
+        likelihood,
+        cvssScore: cvss_score,
+        cvssString: cvss_string,
+        categoryId: category_id,
+        section,
+        customFields: custom_fields ? JSON.stringify(custom_fields) : undefined,
+      };
+      return ok(await factionPost(`/assessments/vuln/${vulnerability_id}`, body));
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "add_templated_vulnerability",
+  "Add a vulnerability to an assessment from a default template, auto-populating description and recommendation. Use search_vulnerability_templates to find a template first. Override ratings as needed (assessor role required).",
+  {
+    assessment_id: z.number().int().describe("The assessment ID"),
+    template_id: z.number().int().describe("The default vulnerability template ID"),
+    name: z.string().describe("Vulnerability name"),
+    details: z.string().optional().describe("Exploit details / proof of concept"),
+    severity: z.number().int().min(0).max(9).optional().describe("Override severity rating (0-9)"),
+    impact: z.number().int().min(0).max(9).optional().describe("Override impact rating (0-9)"),
+    likelihood: z.number().int().min(0).max(9).optional().describe("Override likelihood rating (0-9)"),
+    cvss_score: z.string().optional().describe("CVSS score (e.g. '7.5')"),
+    cvss_string: z.string().optional().describe("CVSS vector string"),
+    section: z.string().optional().describe("Section (Enterprise feature)"),
+    custom_fields: z.record(z.string(), z.string()).optional().describe("Custom field key-value pairs"),
+  },
+  async ({ assessment_id, template_id, name, details, severity, impact, likelihood, cvss_score, cvss_string, section, custom_fields }) => {
+    try {
+      const body: Record<string, string | number | undefined> = {
+        name,
+        details,
+        severity,
+        impact,
+        likelihood,
+        cvssScore: cvss_score,
+        cvssString: cvss_string,
+        section,
+        customFields: custom_fields ? JSON.stringify(custom_fields) : undefined,
+      };
+      return ok(await factionPost(`/assessments/addDefaultVuln/${assessment_id}/${template_id}`, body));
+    } catch (e) { return err(e); }
+  }
+);
+
 // ===========================================================================
 // VULNERABILITIES
 // ===========================================================================
