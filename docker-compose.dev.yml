@@ -1,7 +1,7 @@
 services:
   faction-mcp:
-    image: factionsecurityllc/faction-mcp:latest
-    pull_policy: always
+    build: .
+    image: mcp/faction
     stdin_open: true
     environment:
       FACTION_API_KEY: ${FACTION_API_KEY}
