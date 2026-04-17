@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import fetch from "node-fetch";
+import { readFileSync } from "fs";
+import { extname } from "path";
 
 const API_KEY = process.env.FACTION_API_KEY;
 const BASE_URL = process.env.FACTION_BASE_URL?.replace(/\/$/, "");
@@ -176,6 +178,46 @@ server.tool(
         vulnerabilities: cleaned,
         next_step: "Use the vulnerability data above to write a professional executive summary in HTML format, then call update_assessment with the generated summary HTML to save it to this assessment.",
       });
+    } catch (e) { return err(e); }
+  }
+);
+
+server.tool(
+  "upload_assessment_image",
+  "Upload an image to a Faction assessment. Returns the image GUID and a markdown embed link that can be pasted directly into vulnerability descriptions, recommendations, or details fields. Provide either a local file path OR a pre-encoded base64 data URI — not both.",
+  {
+    assessment_id: z.number().int().describe("The assessment ID"),
+    image_path: z.string().optional().describe("Absolute path to the image file on disk (png, jpg, gif, webp)"),
+    encoded_image: z.string().optional().describe("Base64 data URI of the image (e.g. data:image/png;base64,AAAA...)"),
+  },
+  async ({ assessment_id, image_path, encoded_image }) => {
+    try {
+      if (!image_path && !encoded_image) {
+        return err(new Error("Provide either image_path or encoded_image"));
+      }
+
+      let dataUri: string;
+
+      if (image_path) {
+        const data = readFileSync(image_path);
+        const ext = extname(image_path).toLowerCase().replace(".", "");
+        const mimeMap: Record<string, string> = {
+          png: "image/png",
+          jpg: "image/jpeg",
+          jpeg: "image/jpeg",
+          gif: "image/gif",
+          webp: "image/webp",
+          svg: "image/svg+xml",
+        };
+        const mime = mimeMap[ext] ?? "image/png";
+        dataUri = `data:${mime};base64,${data.toString("base64")}`;
+      } else {
+        dataUri = encoded_image!;
+      }
+
+      return ok(await factionPost(`/assessments/image/${assessment_id}`, {
+        encodedImage: dataUri,
+      }));
     } catch (e) { return err(e); }
   }
 );
