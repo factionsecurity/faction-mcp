@@ -26,6 +26,14 @@ async function factionGet(path: string): Promise<unknown> {
   return JSON.parse(text);
 }
 
+function sanitizeRichText(text: string): string {
+  // Markdown headers → bold
+  let out = text.replace(/^#{1,6}\s+(.+)$/gm, "**$1**");
+  // HTML headers → <strong>
+  out = out.replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "<strong>$1</strong>");
+  return out;
+}
+
 async function factionPost(path: string, body: Record<string, string | number | boolean | undefined>): Promise<unknown> {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(body)) {
@@ -35,9 +43,8 @@ async function factionPost(path: string, body: Record<string, string | number | 
     method: "POST",
     headers: {
       "FACTION-API-KEY": API_KEY!,
-      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: params.toString(),
+    body: params,
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`Faction API ${res.status}: ${text}`);
@@ -215,7 +222,7 @@ server.tool(
         dataUri = encoded_image!;
       }
 
-      return ok(await factionPost(`/assessments/image/${assessment_id}`, {
+      return ok(await factionPostJSON(`/assessments/image/${assessment_id}`, {
         encodedImage: dataUri,
       }));
     } catch (e) { return err(e); }
@@ -353,9 +360,9 @@ server.tool(
       const body: Record<string, string | number | undefined> = {
         name,
         vulnTemplateId: vuln_template_id,
-        description: description ? Buffer.from(description).toString("base64") : undefined,
-        recommendation: recommendation ? Buffer.from(recommendation).toString("base64") : undefined,
-        details: details ? Buffer.from(details).toString("base64") : undefined,
+        description: description ? Buffer.from(sanitizeRichText(description)).toString("base64") : undefined,
+        recommendation: recommendation ? Buffer.from(sanitizeRichText(recommendation)).toString("base64") : undefined,
+        details: details ? Buffer.from(sanitizeRichText(details)).toString("base64") : undefined,
         categoryId: category_id,
         severity,
         impact,
@@ -392,9 +399,9 @@ server.tool(
     try {
       const body: Record<string, string | number | undefined> = {
         name,
-        description: description ? Buffer.from(description).toString("base64") : undefined,
-        recommendation: recommendation ? Buffer.from(recommendation).toString("base64") : undefined,
-        details: details ? Buffer.from(details).toString("base64") : undefined,
+        description: description ? Buffer.from(sanitizeRichText(description)).toString("base64") : undefined,
+        recommendation: recommendation ? Buffer.from(sanitizeRichText(recommendation)).toString("base64") : undefined,
+        details: details ? Buffer.from(sanitizeRichText(details)).toString("base64") : undefined,
         severity,
         impact,
         likelihood,
@@ -572,7 +579,7 @@ server.tool(
   },
   async ({ name }) => {
     try {
-      return ok(await factionPostJSON("/vulnerabilities/category", { name }));
+      return ok(await factionPost("/vulnerabilities/category", { name }));
     } catch (e) { return err(e); }
   }
 );

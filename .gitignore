@@ -3,6 +3,7 @@ dist/
 
 .env
 .env.local
+.mcp.json
 .env.*.local
 !.env.example
 
