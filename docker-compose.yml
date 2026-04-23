@@ -1,8 +1,14 @@
 services:
   faction-mcp:
     image: factionsecurityllc/faction-mcp:latest
+    platform: linux/amd64  
     pull_policy: always
     stdin_open: true
+#   NODE_EXTRA_CA_CERTS: /certs/ca-bundle.crt
     environment:
       FACTION_API_KEY: ${FACTION_API_KEY}
       FACTION_BASE_URL: ${FACTION_BASE_URL}
+# Uncomment this section and NODE_EXTRA_CA_CERTS if 
+#   your company uses internal or custom CA's        
+#   volumes:
+#      - /path/to/your/custom/ca-bundle.crt:/certs/ca-bundle.crt:ro 
