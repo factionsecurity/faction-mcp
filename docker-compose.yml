@@ -1,14 +1,23 @@
 services:
   faction-mcp:
     image: factionsecurityllc/faction-mcp:latest
-    platform: linux/amd64  
+    platform: linux/amd64
     pull_policy: always
     stdin_open: true
 #   NODE_EXTRA_CA_CERTS: /certs/ca-bundle.crt
     environment:
       FACTION_API_KEY: ${FACTION_API_KEY}
       FACTION_BASE_URL: ${FACTION_BASE_URL}
-# Uncomment this section and NODE_EXTRA_CA_CERTS if 
-#   your company uses internal or custom CA's        
-#   volumes:
-#      - /path/to/your/custom/ca-bundle.crt:/certs/ca-bundle.crt:ro 
+      # Where downloaded reports are saved inside the container.
+      FACTION_REPORTS_DIR: /app/reports
+      # Host-side path of the volume mount below. Reported back to the MCP
+      # client as `file_path` so the user can open the file directly.
+      # Set to an absolute path on your machine for best results.
+      FACTION_REPORTS_HOST_DIR: ${FACTION_REPORTS_HOST_DIR:-./faction-reports}
+    volumes:
+      # Reports written by get_assessment_report land here on your host.
+      # Change the left side to relocate; keep it in sync with FACTION_REPORTS_HOST_DIR.
+      - ${FACTION_REPORTS_HOST_DIR:-./faction-reports}:/app/reports
+# Uncomment this section and NODE_EXTRA_CA_CERTS if
+#   your company uses internal or custom CA's
+#      - /path/to/your/custom/ca-bundle.crt:/certs/ca-bundle.crt:ro
