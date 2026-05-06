@@ -1,6 +1,6 @@
 {
   "name": "faction-mcp",
-  "version": "1.0.0",
+  "version": "0.1.4",
   "description": "MCP server for Faction penetration testing management platform",
   "type": "module",
   "bin": {
