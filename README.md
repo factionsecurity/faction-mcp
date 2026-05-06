@@ -33,6 +33,18 @@ FACTION_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 FACTION_BASE_URL=https://faction.yourcompany.com
 ```
 
+#### Optional: reports directory
+
+Tools that download or generate reports (`get_assessment_report`, `generate_assessment_report`) write the resulting PDF/DOCX file to disk and return its path. By default the compose files mount `./faction-reports` (next to the compose file) into the container at `/app/reports`, so the file lands on your host where you can open it.
+
+To use a different host folder, set `FACTION_REPORTS_HOST_DIR` in `.env` to an absolute path:
+
+```env
+FACTION_REPORTS_HOST_DIR=/Users/me/faction-reports
+```
+
+The same path is reported back as `file_path` in tool responses so the user can open the file directly.
+
 ### 2. Build the image
 
 ```bash
@@ -91,22 +103,31 @@ To update credentials, edit `.env` — no rebuild required.
 
 | Tool | Description |
 |------|-------------|
-| `get_assessment_queue` | Get all non-completed assessments assigned to the authenticated user |
+| `get_assessment_queue` | Get the user's active queue (in-progress / upcoming / past-due). Use this for "my recent assessments" — not the completed endpoints |
+| `get_completed_assessments` | Get completed assessments within a date range with full detail |
+| `get_completed_assessments_condensed` | Same as above but with large text blocks stripped — preferred for stats and historical summaries |
 | `get_assessment` | Get full details for a specific assessment by ID |
 | `update_assessment` | Update assessment fields: notes, executive summary, distribution list, custom fields |
 | `get_assessment_vulnerabilities` | Get full vulnerability data for an assessment (large response — includes HTML and screenshots) |
 | `get_vulnerability_summary_data` | Get stripped vulnerability data optimized for generating executive summaries |
+| `get_assessment_report` | Download the existing report (PDF/DOCX) for an assessment to the configured reports directory |
+| `generate_assessment_report` | Kick off a fresh report build and poll until it finishes (or until `max_wait_seconds` elapses) |
+| `check_report_status` | Standalone status check used to resume polling when generation outlasts the initial wait |
 
 ### Vulnerabilities
 
 | Tool | Description |
 |------|-------------|
-| `get_vulnerabilities` | Get all vulnerabilities opened within a date range |
+| `get_vulnerabilities` | Get all vulnerabilities opened within a date range with full detail |
+| `get_vulnerabilities_condensed` | Same as above with large text blocks stripped — preferred for stats and summaries |
+| `create_vulnerability` | Add a vulnerability to an assessment. Interactively prompts for missing title/severity, offers matching default templates, and confirms whether to mirror severity to impact/likelihood |
+| `update_vulnerability` | Update fields on an existing vulnerability |
+| `add_templated_vulnerability` | Add a vulnerability from a default template (search with `search_vulnerability_templates` first) |
 | `get_vulnerability` | Get a vulnerability by ID |
 | `get_vulnerability_by_tracking` | Get a vulnerability by tracking ID (e.g. Jira ticket) |
 | `set_vulnerability_tracking` | Assign a tracking ID to a vulnerability |
 | `set_vulnerability_status` | Set remediation status (dev/prod closed dates) |
-| `get_risk_levels` | Get configured risk level definitions |
+| `get_risk_levels` | Get the configured (mapped) risk level definitions; unmapped slots are filtered out |
 | `get_categories` | Get all vulnerability categories |
 | `get_category` | Get a specific category by ID |
 | `create_category` | Create a new vulnerability category (manager role required) |
@@ -144,3 +165,31 @@ To update credentials, edit `.env` — no rebuild required.
 ## Generating Executive Summaries
 
 Use `get_vulnerability_summary_data` (not `get_assessment_vulnerabilities`) when generating executive summaries. It returns clean, stripped text optimized for LLM processing. After the AI generates the summary HTML, it will call `update_assessment` to save it automatically.
+
+## Creating Vulnerabilities
+
+`create_vulnerability` (and `update_vulnerability` / `add_templated_vulnerability`) accept severity, impact, and likelihood as **risk-level NAMES** — e.g. `"Critical"`, `"High"`, `"P1"`. The server resolves the name to the correct numeric ID for your Faction instance using `get_risk_levels`, so the LLM does not have to guess and IDs that differ between instances do not need to be hard-coded.
+
+When required information is missing, `create_vulnerability` walks the user through an interactive workflow via MCP elicitation (supported by Claude Code, Claude Desktop, and other elicitation-capable clients):
+
+1. **Title and severity** — if either is missing, the user is prompted for it. Risk levels are presented as a dropdown of the names actually configured on the instance.
+2. **Template offer** — if no `description` / `recommendation` / `vuln_template_id` is supplied, the server searches default templates by the vulnerability title and offers any matches. Picking one auto-populates description and recommendation.
+3. **Mirror severity** — if severity is set but impact/likelihood are not, the server asks whether to use the severity level for both. Pick "no" and a follow-up form asks for the explicit impact and likelihood values.
+
+If the calling client does not support elicitation, the tool returns a clear error listing the missing fields so the LLM can ask the user via plain text instead.
+
+## Generating and Downloading Reports
+
+There are three tools for working with assessment reports:
+
+- **`generate_assessment_report`** — kicks off a fresh report build (use `retest=true` for finalized assessments) and polls for completion up to `max_wait_seconds` (default 60). When the report is ready, the response says so; if it's still building, the response includes the `gentime` so polling can be resumed.
+- **`check_report_status`** — standalone poll for the case where the initial wait window expired. Pass `last_known_gentime` from the generate response.
+- **`get_assessment_report`** — downloads the existing report (PDF or DOCX). The file is written to the configured reports directory and the absolute host path is returned as `file_path`.
+
+Typical flow:
+
+1. Ask the AI to "generate a new report for assessment 420."
+2. The MCP server fires generation, waits ~60s, and reports completion (or tells the LLM to keep polling for longer-running reports).
+3. Once `status` is `complete`, the AI calls `get_assessment_report` and shares the host file path so the user can open the document.
+
+Reports are saved to whichever path you configured via `FACTION_REPORTS_HOST_DIR` (see [reports directory](#optional-reports-directory)). Default: `./faction-reports` next to the compose file.
