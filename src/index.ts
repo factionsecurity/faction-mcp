@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import fetch from "node-fetch";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { extname, join } from "path";
 import { tmpdir } from "os";
 
@@ -11,12 +11,45 @@ const BASE_URL = process.env.FACTION_BASE_URL?.replace(/\/$/, "");
 const REPORTS_DIR = process.env.FACTION_REPORTS_DIR || tmpdir();
 // Optional: when running in Docker, the in-container REPORTS_DIR maps to a different
 // path on the host. Set this to the host-side path so returned file_paths are openable
-// on the user's machine.
+// on the user's machine. Also used to translate host-side image_path arguments into
+// the in-container path on the same volume mount.
 const REPORTS_HOST_DIR = process.env.FACTION_REPORTS_HOST_DIR;
+
+// Translate a host-side path under REPORTS_HOST_DIR to the in-container path on the
+// same volume mount. If the input is already in-container or doesn't match the host
+// prefix, it's returned unchanged.
+function resolveLocalPath(p: string): string {
+  if (!REPORTS_HOST_DIR) return p;
+  const host = REPORTS_HOST_DIR.replace(/\/$/, "");
+  if (p === host) return REPORTS_DIR;
+  if (p.startsWith(host + "/")) return REPORTS_DIR + p.slice(host.length);
+  return p;
+}
 
 if (!API_KEY || !BASE_URL) {
   process.stderr.write("FACTION_API_KEY and FACTION_BASE_URL are required\n");
   process.exit(1);
+}
+
+// Tell the user (via stderr — visible in `docker logs`) if the shared reports/images
+// mount is missing or unconfigured. The dir is required for upload_assessment_image
+// and get/generate_assessment_report.
+const REPORTS_DIR_AVAILABLE = existsSync(REPORTS_DIR);
+if (!REPORTS_DIR_AVAILABLE) {
+  process.stderr.write(
+    `[faction-mcp] WARNING: reports/images directory ${REPORTS_DIR} does not exist inside the container. ` +
+    `Image uploads (upload_assessment_image with image_path) and report downloads will fail until this is fixed. ` +
+    `If running via docker-compose, set FACTION_REPORTS_HOST_DIR in the .env next to your docker-compose file ` +
+    `(default mount: /tmp -> /app/reports), then restart the container.\n`
+  );
+}
+
+function mountErrorMessage(extra?: string): string {
+  return [
+    `The reports/images mount (${REPORTS_DIR}) is not available inside the container.`,
+    extra,
+    `Fix: set FACTION_REPORTS_HOST_DIR in the .env next to your docker-compose file (e.g. FACTION_REPORTS_HOST_DIR=/tmp), then rebuild/restart the container.`,
+  ].filter(Boolean).join(" ");
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +199,7 @@ const server = new McpServer({
     "Never include the numeric IDs for overall risk, impact, or likelihood in output to the user unless they specifically ask for the numeric IDs.",
     "WRITES (create_vulnerability / update_vulnerability / add_templated_vulnerability): pass severity/impact/likelihood as the risk level NAME (e.g. 'Critical', 'High', 'P1'). The server resolves names to instance-specific IDs automatically — do NOT try to translate names to numeric IDs yourself, and do NOT guess numeric IDs. On create, if you only have severity, omit impact/likelihood and the server will default them to the severity level.",
     "ASSESSMENT QUERIES — disambiguation: 'my assessments', 'my recent assessments', 'my current/active/open assessments', 'what's on my plate', or 'what am I working on' all refer to the user's active queue — use get_assessment_queue. Only use get_completed_assessments / get_completed_assessments_condensed when the user explicitly asks about COMPLETED, CLOSED, FINISHED, PAST, or HISTORICAL work, or when they specify a past date range.",
+    "IMAGE INLINING (include_base64_images): assessment and vulnerability retrieval tools accept an optional `include_base64_images` flag. ALWAYS leave it at the default (false) unless the user explicitly asks for raw image bytes. With false, embedded images come back as `<img src=\"getImage?id=...\"/>` references — small, easy to round-trip when patching the field. With true, every image is inlined as a base64 data URI, which can blow up the response by orders of magnitude and makes update_vulnerability / update_assessment payloads enormous. Read with false; only flip to true for explicit byte-export use cases. IMAGE UPLOADS (upload_assessment_image): the MCP server runs in Docker and reads files via a single mounted directory (default host path `/tmp`, set via FACTION_REPORTS_HOST_DIR). ALWAYS prefer `image_path` over `encoded_image` because base64 strings round-tripped through tool arguments can drift and corrupt the image. Workflow: (1) materialize the file in the mounted host dir — for a host file, run `cp /path/to/source.png /tmp/source.png` via Bash; for a pasted screenshot saved by the client to a temp path, copy that path the same way. (2) Call upload_assessment_image with `image_path=/tmp/source.png` (host path — the server auto-translates to the in-container mount). The MCP server will then read the bytes off disk and base64-encode them deterministically. Only use `encoded_image` when you genuinely cannot get the bytes onto disk under the mounted directory.",
   ].join(" "),
 });
 
@@ -176,10 +210,12 @@ const server = new McpServer({
 server.tool(
   "get_assessment_queue",
   "Get the authenticated user's active assessment queue — assessments currently assigned to them that are in progress, upcoming, or past due (i.e. not yet completed). USE THIS for prompts like 'show me my assessments', 'my recent assessments', 'what's on my plate', 'my current/active/open assessments', 'what am I working on'. Requires assessor or manager role. Do NOT use this for historical or completed work — use get_completed_assessments_condensed for that.",
-  {},
-  async () => {
+  {
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false (returns `<img src=\"getImage?id=...\"/>` references) — saves tokens and keeps fields easier to update. Only set true when you specifically need the bytes inline."),
+  },
+  async ({ include_base64_images }) => {
     try {
-      return ok(await factionGet("/assessments/queue"));
+      return ok(await factionGet(`/assessments/queue?includeBase64Images=${include_base64_images}`));
     } catch (e) { return err(e); }
   }
 );
@@ -189,10 +225,11 @@ server.tool(
   "Get full details for a specific assessment by ID.",
   {
     assessment_id: z.number().int().describe("The assessment ID"),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false (image references only) — saves tokens. Only set true when you need the bytes inline."),
   },
-  async ({ assessment_id }) => {
+  async ({ assessment_id, include_base64_images }) => {
     try {
-      return ok(await factionGet(`/assessments/${assessment_id}`));
+      return ok(await factionGet(`/assessments/${assessment_id}?includeBase64Images=${include_base64_images}`));
     } catch (e) { return err(e); }
   }
 );
@@ -225,10 +262,11 @@ server.tool(
   "Get all vulnerabilities for a specific assessment. Returns full details including screenshots and HTML — response can be very large. Do NOT use this tool to generate executive summaries. For executive summaries, use get_vulnerability_summary_data instead.",
   {
     assessment_id: z.number().int().describe("The assessment ID"),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images are inlined as base64 data URIs (potentially huge responses). Default false (image references only) — strongly recommended. Only set true when the user explicitly asks for the raw bytes."),
   },
-  async ({ assessment_id }) => {
+  async ({ assessment_id, include_base64_images }) => {
     try {
-      return ok(await factionGet(`/assessments/vulns/${assessment_id}`));
+      return ok(await factionGet(`/assessments/vulns/${assessment_id}?includeBase64Images=${include_base64_images}`));
     } catch (e) { return err(e); }
   }
 );
@@ -241,7 +279,7 @@ server.tool(
   },
   async ({ assessment_id }) => {
     try {
-      const vulns = await factionGet(`/assessments/vulns/${assessment_id}`) as Array<Record<string, unknown>>;
+      const vulns = await factionGet(`/assessments/vulns/${assessment_id}?includeBase64Images=false`) as Array<Record<string, unknown>>;
 
       function stripHtml(html: unknown): string {
         if (!html) return "";
@@ -275,13 +313,14 @@ server.tool(
 
 server.tool(
   "upload_assessment_image",
-  "Upload an image to a Faction assessment. Returns the image GUID and a markdown embed link that can be pasted directly into vulnerability descriptions, recommendations, or details fields. Provide either a local file path OR a pre-encoded base64 data URI — not both.",
+  "Upload an image to a Faction assessment. Returns the image GUID and an HTML `<img>` embed snippet ready to paste into vulnerability description, recommendation, or details fields (those fields are HTML — markdown image syntax does NOT render in them). STRONGLY PREFER `image_path` — the MCP server reads bytes off disk and base64-encodes them deterministically. Workflow: first copy the source file (or save the pasted screenshot) into the mounted host directory `FACTION_REPORTS_HOST_DIR` (default `/tmp`), e.g. `cp /Users/me/Desktop/foo.png /tmp/foo.png`, then pass that host path as `image_path` — the server auto-translates host paths under the mount to their in-container equivalents. Only fall back to `encoded_image` when you have no way to materialize the file on disk (e.g. truly inline-only bytes); large base64 strings can drift when round-tripped through tool arguments and may corrupt the image.",
   {
     assessment_id: z.number().int().describe("The assessment ID"),
-    image_path: z.string().optional().describe("Absolute path to the image file on disk (png, jpg, gif, webp)"),
-    encoded_image: z.string().optional().describe("Base64 data URI of the image (e.g. data:image/png;base64,AAAA...)"),
+    image_path: z.string().optional().describe("Path to the image file. Prefer this over encoded_image. Host paths under FACTION_REPORTS_HOST_DIR (default /tmp) are auto-translated to the in-container mount, so e.g. /tmp/foo.png works directly. The LLM should `cp` host-side files into that directory first, then pass the resulting path."),
+    encoded_image: z.string().optional().describe("Base64 data URI of the image (e.g. `data:image/png;base64,AAAA...`). Fallback only — long base64 strings can be corrupted in transit through tool arguments. Prefer `image_path` whenever the file can be materialized on disk."),
+    alt_text: z.string().optional().describe("Optional alt text for the <img> tag. Defaults to 'screenshot'."),
   },
-  async ({ assessment_id, image_path, encoded_image }) => {
+  async ({ assessment_id, image_path, encoded_image, alt_text }) => {
     try {
       if (!image_path && !encoded_image) {
         return err(new Error("Provide either image_path or encoded_image"));
@@ -290,8 +329,20 @@ server.tool(
       let dataUri: string;
 
       if (image_path) {
-        const data = readFileSync(image_path);
-        const ext = extname(image_path).toLowerCase().replace(".", "");
+        const resolved = resolveLocalPath(image_path);
+        if (!existsSync(resolved)) {
+          if (resolved.startsWith(REPORTS_DIR) && !REPORTS_DIR_AVAILABLE) {
+            return err(new Error(mountErrorMessage(`Could not read ${resolved} (resolved from ${image_path}).`)));
+          }
+          return err(new Error(
+            `Image not found at ${resolved} (resolved from ${image_path}). ` +
+            (REPORTS_HOST_DIR
+              ? `Make sure the file lives under ${REPORTS_HOST_DIR} on the host (mounted as ${REPORTS_DIR} in the container). \`cp\` it there first, then retry.`
+              : `FACTION_REPORTS_HOST_DIR is not set; configure it in the .env next to your docker-compose file (e.g. /tmp) and restart the container.`)
+          ));
+        }
+        const data = readFileSync(resolved);
+        const ext = extname(resolved).toLowerCase().replace(".", "");
         const mimeMap: Record<string, string> = {
           png: "image/png",
           jpg: "image/jpeg",
@@ -306,9 +357,23 @@ server.tool(
         dataUri = encoded_image!;
       }
 
-      return ok(await factionPostJSON(`/assessments/image/${assessment_id}`, {
+      const uploaded = await factionPost(`/assessments/image/${assessment_id}`, {
         encodedImage: dataUri,
-      }));
+      }) as { guid?: string; markdown?: string };
+
+      const guid = uploaded.guid;
+      const src = guid ? `getImage?id=${assessment_id}:${guid}` : undefined;
+      const safeAlt = (alt_text ?? "screenshot").replace(/"/g, "&quot;");
+      const html = src ? `<img src="${src}" alt="${safeAlt}" />` : undefined;
+
+      return ok({
+        guid,
+        html,
+        markdown: uploaded.markdown,
+        next_step: html
+          ? `Paste the \`html\` snippet directly into the vulnerability description, recommendation, or details field (those fields are HTML — wrap in <p>...</p> if appending to existing content). Do NOT use the markdown form for those fields; it will render as literal text.`
+          : undefined,
+      });
     } catch (e) { return err(e); }
   }
 );
@@ -357,10 +422,11 @@ server.tool(
   {
     start: z.string().describe("Start date (MM/DD/YYYY)"),
     end: z.string().optional().describe("End date (MM/DD/YYYY). Defaults to now if omitted."),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false — strongly recommended for this large endpoint."),
   },
-  async ({ start, end }) => {
+  async ({ start, end, include_base64_images }) => {
     try {
-      return ok(await factionPost("/assessments/completed", { start, end }));
+      return ok(await factionPost(`/assessments/completed?includeBase64Images=${include_base64_images}`, { start, end }));
     } catch (e) { return err(e); }
   }
 );
@@ -371,11 +437,13 @@ server.tool(
   {
     start: z.string().describe("Start date (MM/DD/YYYY)"),
     end: z.string().optional().describe("End date (MM/DD/YYYY). Defaults to now if omitted."),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false — saves tokens."),
   },
-  async ({ start, end }) => {
+  async ({ start, end, include_base64_images }) => {
     try {
       const params = new URLSearchParams({ start });
       if (end) params.set("end", end);
+      params.set("includeBase64Images", String(include_base64_images));
       return ok(await factionGet(`/assessments/completed/condensed?${params.toString()}`));
     } catch (e) { return err(e); }
   }
@@ -389,6 +457,11 @@ server.tool(
   },
   async ({ assessment_id }) => {
     try {
+      if (!REPORTS_DIR_AVAILABLE) {
+        return err(new Error(mountErrorMessage(
+          `Cannot save the downloaded report — the host directory isn't mounted, so any file written would be trapped inside the container.`
+        )));
+      }
       const { buffer, filename, contentType } = await factionGetBinary(`/assessments/report/${assessment_id}`);
       const safeName = filename.replace(/[/\\]/g, "_");
       mkdirSync(REPORTS_DIR, { recursive: true });
@@ -491,10 +564,11 @@ server.tool(
   "Get the vulnerability history for an application across all its assessments. Note: Application ID is not the same as Assessment ID — one application can span multiple assessments.",
   {
     app_id: z.string().describe("The application ID (not the assessment ID)"),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false — saves tokens."),
   },
-  async ({ app_id }) => {
+  async ({ app_id, include_base64_images }) => {
     try {
-      return ok(await factionGet(`/assessments/history/${encodeURIComponent(app_id)}`));
+      return ok(await factionGet(`/assessments/history/${encodeURIComponent(app_id)}?includeBase64Images=${include_base64_images}`));
     } catch (e) { return err(e); }
   }
 );
@@ -517,10 +591,11 @@ server.tool(
   "Get full details and exploit steps for a specific vulnerability by ID (assessor role required). Returns richer data than get_vulnerability, including step-by-step exploit information.",
   {
     vulnerability_id: z.number().int().describe("The vulnerability ID"),
+    include_base64_images: z.boolean().optional().default(false).describe("If true, embedded images in HTML fields are inlined as base64 data URIs. Default false (image references only) — strongly recommended when you want to read or update the vulnerability text, since inline images bloat the response and make patching harder."),
   },
-  async ({ vulnerability_id }) => {
+  async ({ vulnerability_id, include_base64_images }) => {
     try {
-      return ok(await factionGet(`/assessments/vuln/${vulnerability_id}`));
+      return ok(await factionGet(`/assessments/vuln/${vulnerability_id}?includeBase64Images=${include_base64_images}`));
     } catch (e) { return err(e); }
   }
 );

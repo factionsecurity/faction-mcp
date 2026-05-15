@@ -7,6 +7,6 @@ services:
       FACTION_API_KEY: ${FACTION_API_KEY}
       FACTION_BASE_URL: ${FACTION_BASE_URL}
       FACTION_REPORTS_DIR: /app/reports
-      FACTION_REPORTS_HOST_DIR: ${FACTION_REPORTS_HOST_DIR:-./faction-reports}
+      FACTION_REPORTS_HOST_DIR: ${FACTION_REPORTS_HOST_DIR:-/tmp}
     volumes:
-      - ${FACTION_REPORTS_HOST_DIR:-./tmp}:/app/reports
+      - ${FACTION_REPORTS_HOST_DIR:-/tmp}:/app/reports

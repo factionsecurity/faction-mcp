@@ -33,17 +33,20 @@ FACTION_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 FACTION_BASE_URL=https://faction.yourcompany.com
 ```
 
-#### Optional: reports directory
+#### Optional: shared reports / images directory
 
-Tools that download or generate reports (`get_assessment_report`, `generate_assessment_report`) write the resulting PDF/DOCX file to disk and return its path. By default the compose files mount `./faction-reports` (next to the compose file) into the container at `/app/reports`, so the file lands on your host where you can open it.
+The compose files mount a single host directory into the container at `/app/reports`. By default this is `/tmp`. It serves two purposes:
+
+1. **Downloaded reports** — `get_assessment_report` and `generate_assessment_report` write the PDF/DOCX here, and the host path is returned as `file_path` so the client can open it.
+2. **Image uploads** — `upload_assessment_image` reads files from this directory. The LLM is instructed to `cp` host-side images here first (or save pasted screenshots here), then pass the host path. The server auto-translates `/tmp/foo.png` → `/app/reports/foo.png` internally so the LLM doesn't have to think about the container.
+
+Going through disk avoids round-tripping a large base64 string through tool arguments, where token-stream drift can corrupt the bytes.
 
 To use a different host folder, set `FACTION_REPORTS_HOST_DIR` in `.env` to an absolute path:
 
 ```env
 FACTION_REPORTS_HOST_DIR=/Users/me/faction-reports
 ```
-
-The same path is reported back as `file_path` in tool responses so the user can open the file directly.
 
 ### 2. Build the image
 

@@ -8,16 +8,19 @@ services:
     environment:
       FACTION_API_KEY: ${FACTION_API_KEY}
       FACTION_BASE_URL: ${FACTION_BASE_URL}
-      # Where downloaded reports are saved inside the container.
+      # In-container mount point. Used both for downloaded reports and as the
+      # staging directory for image uploads (the MCP server reads images here).
       FACTION_REPORTS_DIR: /app/reports
       # Host-side path of the volume mount below. Reported back to the MCP
-      # client as `file_path` so the user can open the file directly.
-      # Set to an absolute path on your machine for best results.
-      FACTION_REPORTS_HOST_DIR: ${FACTION_REPORTS_HOST_DIR:-./faction-reports}
+      # client as `file_path` so the user can open downloaded reports directly,
+      # and used by upload_assessment_image to translate host paths the LLM
+      # passes (e.g. /tmp/foo.png) to their in-container equivalent.
+      FACTION_REPORTS_HOST_DIR: ${FACTION_REPORTS_HOST_DIR:-/tmp}
     volumes:
-      # Reports written by get_assessment_report land here on your host.
-      # Change the left side to relocate; keep it in sync with FACTION_REPORTS_HOST_DIR.
-      - ${FACTION_REPORTS_HOST_DIR:-./faction-reports}:/app/reports
+      # Reports land here on your host AND this is where the LLM should `cp`
+      # images before calling upload_assessment_image. Override by setting
+      # FACTION_REPORTS_HOST_DIR in .env.
+      - ${FACTION_REPORTS_HOST_DIR:-/tmp}:/app/reports
 # Uncomment this section and NODE_EXTRA_CA_CERTS if
 #   your company uses internal or custom CA's
 #      - /path/to/your/custom/ca-bundle.crt:/certs/ca-bundle.crt:ro
